@@ -1,0 +1,384 @@
+---
+title: "Untitled"
+author: "José Luis Rovira Martín"
+date: "13/5/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(caret)
+library(recipes)
+library(dplyr)
+library(QSARdata)
+
+
+#install.packages("ggpubr")
+
+library(caret)
+#####library(questionr)
+
+library(discretization)
+
+library(gridExtra)
+library(grid)
+#library(lattice)
+library(forcats) 
+
+library(MLmetrics)
+
+library(corrplot)
+library(GGally)
+library(ggridges)
+library(ggpubr)
+library(dplyr)
+
+library(party)
+
+#####library(readr)
+library(caret)
+library(dplyr)
+library(xgboost)
+library(fastAdaboost)
+
+suppressMessages(library(ggplot2))
+suppressMessages(library(mgcv))
+suppressMessages(library(splines))
+
+library("FCBF")
+library(SummarizedExperiment)
+library("praznik")
+
+library("dplyr")
+#library("htmltools")
+#library("klaR")
+
+library(MASS)
+library(DiagrammeR )
+```
+
+SVM
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+data <- read.csv("data.csv")
+trainTest <- prepareFinal(data)
+
+# Train data
+train   <- trainTest$train
+train.y <- as.factor(make.names(train$shot_made_flag))
+train$shot_made_flag <- NULL;
+
+# Test data
+test <- trainTest$test
+test$shot_made_flag  <- NULL;
+test.id <- data[ !complete.cases(data), which( colnames(data)=="shot_id" ) ]
+
+# Se convierten todas las variables en numéricas
+train$remaining <- as.numeric(as.character(train$remaining))
+train$season <- as.numeric(as.character(train$season))
+train$remaining <- as.numeric(as.character(train$remaining))
+train$shot_angle <- as.numeric(as.character(train$shot_angle))
+train$shot_distance <- as.numeric(as.character(train$shot_distance))
+train$home <- as.numeric(as.character(train$home))
+train$loc_y <- as.numeric(as.character(train$loc_y))
+
+test$remaining <- as.numeric(as.character(test$remaining))
+test$season <- as.numeric(as.character(test$season))
+test$remaining <- as.numeric(as.character(test$remaining))
+test$shot_angle <- as.numeric(as.character(test$shot_angle))
+test$shot_distance <- as.numeric(as.character(test$shot_distance))
+test$home <- as.numeric(as.character(test$home))
+test$loc_y <- as.numeric(as.character(test$loc_y))
+
+# Se entrena el modelo
+control <- caret::trainControl(method = "cv", number = 3, classProbs = TRUE, summaryFunction = mnLogLoss, verboseIter = T, savePredictions = "all")
+
+set.seed(7)
+classifier <- caret::train(x = train, y = train.y, method = "svmLinearWeights", metric = "logLoss", trControl = control, maximize = FALSE)
+
+print("LogLoss")
+print(classifier$results$logLoss)
+
+# Predicción sobre el modelo entrenado
+pred.y <- stats::predict(classifier, newdata = test, type="prob")
+
+# Se realiza el envío
+submit        <- data.frame(test.id, pred.y[2])
+names(submit) <- c( "shot_id", "shot_made_flag" )
+write.table(submit, file = "mlp.csv", sep = ",", row.names = FALSE, quote = FALSE)
+
+# Mejor resultado: 0.6288266
+```
+
+C4.5
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+data <- read.csv("data.csv")
+trainTest <- prepareFinal(data)
+
+# Train data
+train <- trainTest$train
+train.y <- as.factor(make.names(train$shot_made_flag))
+train$shot_made_flag <- NULL;
+
+# Test data
+test <- trainTest$test
+test$shot_made_flag  <- NULL;
+test.id <- data[ !complete.cases(data), which( colnames(data)=="shot_id" ) ]
+
+# Se convierten todas las variables en numéricas
+train$remaining <- as.numeric(as.character(train$remaining))
+train$season <- as.numeric(as.character(train$season))
+train$remaining <- as.numeric(as.character(train$remaining))
+train$shot_angle <- as.numeric(as.character(train$shot_angle))
+train$shot_distance <- as.numeric(as.character(train$shot_distance))
+train$home <- as.numeric(as.character(train$home))
+train$loc_y <- as.numeric(as.character(train$loc_y))
+
+test$remaining <- as.numeric(as.character(test$remaining))
+test$season <- as.numeric(as.character(test$season))
+test$remaining <- as.numeric(as.character(test$remaining))
+test$shot_angle <- as.numeric(as.character(test$shot_angle))
+test$shot_distance <- as.numeric(as.character(test$shot_distance))
+test$home <- as.numeric(as.character(test$home))
+test$loc_y <- as.numeric(as.character(test$loc_y))
+
+# Se entrena el modelo
+control <- caret::trainControl(method = "cv", number = 3, classProbs = TRUE, summaryFunction = mnLogLoss, verboseIter = F, savePredictions = "all")
+
+set.seed(7)
+classifier <- caret::train(x = train, y = train.y, method = "J48", metric = "logLoss", trControl = control, maximize = FALSE)
+
+print("LogLoss")
+print(classifier$results$logLoss)
+
+# Predicción sobre el modelo entrenado
+pred.y <- stats::predict(classifier, newdata = test, type="prob")
+
+# Se realiza el envío
+submit        <- data.frame(test.id, pred.y[2])
+names(submit) <- c( "shot_id", "shot_made_flag" )
+write.table(submit, file = "mlp.csv", sep = ",", row.names = FALSE, quote = FALSE)
+
+# Mejor resultado: 0.6277504
+```
+
+
+Multi-Layer Perceptron
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+data <- read.csv("data.csv")
+trainTest <- prepareFinal(data)
+
+# Train data
+train <- trainTest$train
+train.y <- as.factor(make.names(train$shot_made_flag))
+train$shot_made_flag <- NULL;
+
+# Test data
+test <- trainTest$test
+test$shot_made_flag  <- NULL;
+test.id <- data[ !complete.cases(data), which( colnames(data)=="shot_id" ) ]
+
+
+train$remaining <- as.numeric(as.character(train$remaining))
+train$season <- as.numeric(as.character(train$season))
+train$remaining <- as.numeric(as.character(train$remaining))
+train$shot_angle <- as.numeric(as.character(train$shot_angle))
+train$shot_distance <- as.numeric(as.character(train$shot_distance))
+train$home <- as.numeric(as.character(train$home))
+train$loc_y <- as.numeric(as.character(train$loc_y))
+
+test$remaining <- as.numeric(as.character(test$remaining))
+test$season <- as.numeric(as.character(test$season))
+test$remaining <- as.numeric(as.character(test$remaining))
+test$shot_angle <- as.numeric(as.character(test$shot_angle))
+test$shot_distance <- as.numeric(as.character(test$shot_distance))
+test$home <- as.numeric(as.character(test$home))
+test$loc_y <- as.numeric(as.character(test$loc_y))
+
+
+# Se entrena el modelo
+control <- caret::trainControl(method = "cv", number = 3, classProbs = TRUE, summaryFunction = mnLogLoss, verboseIter = F, savePredictions = "all")
+
+set.seed(7)
+classifier <- caret::train(x = train, y = train.y, method = "mlp", metric = "logLoss", trControl = control, maximize = FALSE)
+
+print("LogLoss")
+print(classifier$results$logLoss)
+
+# Predicción sobre el modelo entrenado
+pred.y <- stats::predict(classifier, newdata = test, type="prob")
+
+# Se realiza el envío
+submit        <- data.frame(test.id, pred.y[2])
+names(submit) <- c( "shot_id", "shot_made_flag" )
+write.table(submit, file = "mlp.csv", sep = ",", row.names = FALSE, quote = FALSE)
+
+# Mejor resultado: 0.6885536
+```
+
+
+# CART2
+
+```{r message=TRUE}
+source("external.R")
+source("prepare-data.R")
+
+data <- read.csv("data.csv")
+trainTest <- prepareFinal(data)
+
+# Train data
+train <- trainTest$train
+train.y <-as.factor(make.names(train$shot_made_flag))
+train$shot_made_flag <- NULL;
+
+# Test data
+test <- trainTest$test
+test$shot_made_flag  <- NULL;
+test.id <- data[ !complete.cases(data), which( colnames(data)=="shot_id" ) ]
+
+# Se entrena el modelo
+control <- caret::trainControl(method = "cv", number = 3, classProbs = TRUE, summaryFunction = mnLogLoss, verboseIter = F, savePredictions = "all")
+
+set.seed(7)
+classifier <- caret::train(x = train, y = train.y, method = "rpart", metric = "logLoss", trControl = control, maximize = FALSE)
+
+print("LogLoss")
+print(classifier$results$logLoss)
+
+# Predicción sobre el modelo entrenado
+pred.y <- stats::predict(classifier, newdata = test, type="prob")
+
+# Se realiza el envío
+submit        <- data.frame(test.id, pred.y[2])
+names(submit) <- c( "shot_id", "shot_made_flag" )
+write.table(submit, file = "rpart.csv", sep = ",", row.names = FALSE, quote = FALSE)
+
+# Mejor resultado: 0.6252620
+```
+
+# Naive Bayes
+
+```{r message=FALSE, warning=FALSE}
+source("external.R")
+source("prepare-data.R")
+
+data <- read.csv("data.csv")
+trainTest <- prepareFinal(data)
+
+# Preprocess
+#trainTest <- preprocess_v2(trainTest, method = c("center", "scale", "pca", "corr"))
+
+# Train data
+train <- trainTest$train
+train.y <-as.factor(make.names(train$shot_made_flag))
+train$shot_made_flag <- NULL;
+
+# Test data
+test <- trainTest$test
+test$shot_made_flag  <- NULL;
+test.id <- data[ !complete.cases(data), which( colnames(data)=="shot_id" ) ]
+
+# Se entrena el modelo
+control <- caret::trainControl(method = "cv", number = 3, classProbs = TRUE, summaryFunction = mnLogLoss, verboseIter = F, savePredictions = "all")
+
+set.seed(7)
+classifier <- caret::train(x = train, y = train.y, method = "naive_bayes", metric = "logLoss", trControl = control, maximize = FALSE)
+
+print("LogLoss")
+print(classifier$results$logLoss)
+
+# Predicción sobre el modelo entrenado
+pred.y <- stats::predict(classifier, newdata = test, type="prob")
+
+# Se realiza el envío
+submit        <- data.frame(test.id, pred.y[2])
+names(submit) <- c( "shot_id", "shot_made_flag" )
+write.table(submit, file = "Naive_Bayes.csv", sep = ",", row.names = FALSE, quote = FALSE)
+
+# Mejor resultado: 4.820259
+```
+
+# xgboost
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+data <- read.csv("data.csv")
+trainTest2 <- prepareFinal(data)
+
+# Train data
+train <- trainTest$train
+train.y <- as.numeric(as.character(train$shot_made_flag))
+train$shot_made_flag <- NULL;
+
+# Test data
+test <- trainTest$test
+test$shot_made_flag  <- NULL;
+test.id <- data[ !complete.cases(data), which( colnames(data)=="shot_id" ) ]
+
+# Se preparan los datos para XGBoost
+trainM <- data.matrix(train, rownames.force = NA);
+dtrain <- xgb.DMatrix(data = trainM, label = train.y, missing = NaN);
+watchlist <- list(trainM = dtrain);
+
+# Parámetros para XGBoost
+params <- list(objective = "binary:logistic",  booster = "gbtree", eval_metric = "logloss",
+               eta                 = 0.025,
+               max_depth           = 7,
+               min_child_weight    = 1,
+               subsample           = 0.44,
+               colsample_bytree    = 0.48,
+               num_parallel_tree   = 4)
+
+# Cross validation
+set.seed(123);
+xgb_1 <- xgb.cv(params = params, data = dtrain, nrounds = 1500, verbose = 0, maximize = FALSE,
+              nfold = 3,
+              early_stopping_rounds = 20,
+              print_every_n = 1,
+              watchlist = watchlist)
+
+bestRound  <- which.min( (xgb_1$evaluation_log)$test_logloss_mean )
+bestResult <- min( (xgb_1$evaluation_log)$test_logloss_mean )
+
+cat("Best round:",  bestRound,  "\n");
+cat("Best result:", bestResult, "\n");
+
+# Se entrena con todos los datos
+xgb_2 <- xgb.train(params = param,data = dtrain,  nrounds = bestRound, verbose = 0, maximize = FALSE, watchlist = watchlist)
+
+testM <- data.matrix(test, rownames.force = NA);
+preds <- predict(xgb_2, testM);
+
+# Se prepara el envío
+submit        <- data.frame(test.id, preds)
+names(submit) <- c( "shot_id", "shot_made_flag" )
+write.table(submit, file = "xgboost.csv", sep = ",", row.names = FALSE, quote = FALSE)
+
+# Mejor resultado: 0.600083 
+```
+
+# Gráficas
+
+```{r fig.height=5, fig.width=5}
+# Gráfica de importancia
+importance_matrix <- xgb.importance( names, model = xgb_2 )
+xgb.plot.importance(importance_matrix[ 1:20,  ])
+
+# Árbol XGBoost
+#xgb.plot.tree(feature_names = names, model = xgb_2)
+xgb.plot.tree(feature_names = names, model = xgb_2)
+```

@@ -1,0 +1,674 @@
+---
+title: "Proyecto Kaggle - Kobe Bryant Shot Selection"
+author: "José Luis Rovira Martín"
+date: "9/2/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("ggpubr")
+
+library(caret)
+library(questionr)
+
+library(discretization)
+
+library(gridExtra)
+library(grid)
+#library(lattice)
+library(forcats) 
+
+library(MLmetrics)
+
+library(corrplot)
+library(GGally)
+library(ggridges)
+library(ggpubr)
+library(dplyr)
+
+library(party)
+
+suppressMessages(library(ggplot2))
+suppressMessages(library(mgcv))
+suppressMessages(library(splines))
+```
+
+```{r message=FALSE, warning=FALSE}
+data <- read.csv("data.csv")
+
+#summary(data)
+#str(data)
+#describe(data)
+#cat("names =", names(data), "\n")
+#head(data)
+#tail(data)
+
+# Numero de datos N/A
+print(paste("Datos NA: ", sum(is.na(data))))
+
+# Se separan los datos en completos + testing
+data.fullRecords <- data[ complete.cases(data), ]
+data.testRecords <- data[ !complete.cases(data), ]
+```
+
+
+## Limpieza de atributos
+
+- Se eliminan las filas con N/A. No son necesarias.
+- Se convierte el atributo clase shot_made_flag en un Factor
+- Se elimina la columna shot_id: es un identificador y no discrimina.
+- Se elimina las columnas team_id y team_name: solo tienen un único valor.
+- Se elimina la matchup: es una columna que depende del oponente.
+- Se elimina la lat y long: existe correlación perfecta con loc_x, loc_y.
+
+## Atributos respecto a la localización
+
+Limpia los datos
+
+```{r}
+mdlpDiscretizer <- function(dataset) {
+    set.seed(123)
+    ret <- mdlp(dataset)
+    list( dataset = ret$Disc.data, cutpoints = ret$cutp )
+}
+```
+
+
+Random forest, Multilayer Perceptron, Boosted Logistic Regression
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+data.filtered <- norm( exclude( dataTransformation( prepare( data.fullRecords ) ) ) )
+
+models <- list(
+    list(name = "Random Forest", fun = function(formula, data) {
+        train(formula, data = data, method = "rf")
+    }),
+    list(name = "Multilayer Perceptron", fun = function(formula, data) {
+        train(formula, data = data, method = "mlp")
+    }),
+    list(name = "Boosted Logistic Regression", fun = function(formula, data) {
+        train(formula, data = data, method = "LogitBoost")
+    }),
+    list(name = "CART", fun = function(formula, data) {
+        train(formula, data = data, method = "rpart")
+    }),
+    list(name = "k-Nearest Neighbors", fun = function(formula, data) {
+        train(formula, data = data, method = "knn")
+    }),
+    list(name = "Support Vector Machines with Linear Kernel", fun = function(formula, data) {
+        train(formula, data = data, method = "svmLinear")
+    })
+)
+
+for(model in models) {
+    result <- split(data.filtered, p = 0.75, function(train_fold, test_fold) {
+    
+        discretize(train_fold, test_fold, discretizer = mdlpDiscretizer, function(train_fold.a, test_fold.a) {
+            train_fold.a <- asNumericExcept(train_fold.a, c("shot_made_flag"))
+            test_fold.a  <- asNumericExcept(test_fold.a, c("shot_made_flag"))
+    
+            preprocessAll(train_fold.a, test_fold.a, method = c( "range" ), function(train_fold.b, test_fold.b) {
+                trainAndTest2(train_fold.b, test_fold.b, model$fun)
+           })
+        })
+    })
+
+    print(model$name)
+    print(result$accuracy)
+}
+```
+
+
+
+
+
+
+
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+data.filtered <- norm( exclude( dataTransformation( prepare( data.fullRecords ) ) ) )
+
+dv  <- dummyVars(~ action_type + shot_zone_basic + shot_zone_area + opponent, data = data.filtered, fullRank = TRUE)
+tmp <- data.frame(predict(dv, newdata = data.filtered))
+data.filtered <- update(data.filtered %>% select(-action_type, -shot_zone_basic, -shot_zone_area, -opponent), tmp)
+
+# Se pone la clase al final
+data.filtered <- moveToLast( data.filtered, "shot_made_flag" )
+
+models <- list(
+    list(name = "Random Forest", fun = function(formula, data) {
+        train(formula, data = data, method = "rf")
+    }),
+    list(name = "Multilayer Perceptron", fun = function(formula, data) {
+        train(formula, data = data, method = "mlp")
+    }),
+    list(name = "Boosted Logistic Regression", fun = function(formula, data) {
+        train(formula, data = data, method = "LogitBoost")
+    }),
+    list(name = "CART", fun = function(formula, data) {
+        train(formula, data = data, method = "rpart")
+    }),
+    list(name = "k-Nearest Neighbors", fun = function(formula, data) {
+        train(formula, data = data, method = "knn")
+    }),
+    list(name = "Support Vector Machines with Linear Kernel", fun = function(formula, data) {
+        train(formula, data = data, method = "svmLinear")
+    })
+)
+
+for(model in models) {
+    result <- split(data.filtered, p = 0.75, function(train_fold, test_fold) {
+    
+        discretize2(train_fold, test_fold, discretizer = mdlpDiscretizer,  c("remaining", "shot_angle", "shot_distance"), function(train_fold.a, test_fold.a) {
+            train_fold.a <- asNumericExcept(train_fold.a, c("shot_made_flag"))
+            test_fold.a  <- asNumericExcept(test_fold.a, c("shot_made_flag"))
+    
+            preprocessAll(train_fold.a, test_fold.a, method = c( "range" ), function(train_fold.b, test_fold.b) {
+                trainAndTest2(train_fold.b, test_fold.b, model$fun)
+           })
+        })
+    })
+
+    print(model$name)
+    print(result$accuracy)
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+Decision Tree
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+data.filtered <- exclude( dataTransformation( prepare( data.fullRecords ) ) )
+
+result <- split(data.filtered, p = 0.75, function(train_fold, test_fold) {
+
+    preprocessAll(train_fold, test_fold, method = c( "center", "scale" ), function(train_fold.pre, test_fold.pre) {
+
+            discretize(train_fold.pre, test_fold.pre, discretizer = mdlpDiscretizer, function(train_fold.disc, test_fold.disc) {
+
+                    trainAndTest(train_fold.disc, test_fold.disc, "rpart",
+                                     trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3),
+                                     tuneLength = 10)
+                })
+        })
+})
+result$accuracy
+# 0.6743462 
+```
+
+
+
+
+
+
+kNN
+
+```{r}
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        preprocessAll(train_fold, test_fold, method = c( "center", "scale" ),
+            nextStep = function(train_fold.pre, test_fold.pre) {
+
+                discretize(train_fold.pre, test_fold.pre, discretizer = mdlpDiscretizer,
+                    nextStep = function(train_fold.disc, test_fold.disc) {
+
+                        trainAndTest(train_fold.disc, test_fold.disc, "knn")
+                    })
+            })
+    })
+mlp_simple_value
+# 0.640878
+```
+
+Decision tree
+
+```{r}
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        preprocessAll(train_fold, test_fold, method = c( "center", "scale" ),
+            nextStep = function(train_fold.pre, test_fold.pre) {
+
+                discretize(train_fold.pre, test_fold.pre, discretizer = mdlpDiscretizer,
+                    nextStep = function(train_fold.disc, test_fold.disc) {
+
+                        trainAndTest(train_fold.disc, test_fold.disc, "treebag")
+                    })
+            })
+    })
+mlp_simple_value
+# 0.628269
+```
+
+
+```{r}
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        preprocessAll(train_fold, test_fold, method = c( "center", "scale" ),
+            nextStep = function(train_fold.pre, test_fold.pre) {
+
+                discretize(train_fold.pre, test_fold.pre, discretizer = mdlpDiscretizer,
+                    nextStep = function(train_fold.disc, test_fold.disc) {
+
+                        trainAndTest(train_fold.disc, test_fold.disc, "nnet")
+                    })
+            })
+    })
+mlp_simple_value
+# 0.6773039
+```
+
+```{r}
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        preprocessAll(train_fold, test_fold, method = c( "center", "scale" ),
+            nextStep = function(train_fold.pre, test_fold.pre) {
+
+                discretize(train_fold.pre, test_fold.pre, discretizer = mdlpDiscretizer,
+                    nextStep = function(train_fold.disc, test_fold.disc) {
+
+                        trainAndTest(train_fold.disc, test_fold.disc, "svmLinear")
+                    })
+            })
+    })
+mlp_simple_value
+# 0.6768369
+```
+
+
+```{r}
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        discretize(train_fold, test_fold, discretizer = mdlpDiscretizer,
+            nextStep = function(train_fold.disc, test_fold.disc) {
+
+                trainAndTest(train_fold.disc, test_fold.disc, "svmRadial")
+            })
+    })
+mlp_simple_value
+# 0.6766812
+```
+
+
+
+```{r}
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        discretize(train_fold, test_fold, discretizer = mdlpDiscretizer,
+            nextStep = function(train_fold.disc, test_fold.disc) {
+
+                trainAndTest(train_fold.disc, test_fold.disc, "rpart")
+            })
+    })
+mlp_simple_value
+# 0.5538605
+```
+
+
+```{r}
+library(fastAdaboost)
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        discretize(train_fold, test_fold, discretizer = mdlpDiscretizer,
+            nextStep = function(train_fold.disc, test_fold.disc) {
+
+                trainAndTest(train_fold.disc, test_fold.disc, "adaboost")
+            })
+    })
+mlp_simple_value
+# 0.5538605
+```
+
+
+```{r}
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        discretize(train_fold, test_fold, discretizer = mdlpDiscretizer,
+            nextStep = function(train_fold.disc, test_fold.disc) {
+
+                trainAndTest(train_fold.disc, test_fold.disc, "cforest")
+            })
+    })
+mlp_simple_value
+# 0.5538605
+```
+
+
+
+
+```{r}
+library(readr)
+library(caret)
+library(dplyr)
+library(xgboost)
+library(fastAdaboost)
+
+# Las columnas minutes_remaining, seconds_remaining se agrupan en remaining
+# Se eliminan las columnas game_date, loc_x, loc_y, game_event_id, game_id, minutes_remaining, seconds_remaining
+data.subset <- data.fullRecords %>%
+    mutate(remaining = minutes_remaining * 60 + seconds_remaining) %>%
+    subset(select = -c(game_date,
+                       loc_x, loc_y, shot_distance,
+                       combined_shot_type, shot_type,
+                       game_event_id, game_id,
+                       minutes_remaining, seconds_remaining))
+
+# Se pone la clase al final
+data.subset <- moveToLast( data.subset, "shot_made_flag" )
+
+mdlpDiscretizer <- function(dataset) {
+    set.seed(123)
+    ret <- mdlp(dataset)
+    list(dataset = ret$Disc.data, cutpoints = ret$cutp )
+}
+
+
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        discretize(train_fold, test_fold, discretizer = mdlpDiscretizer,
+            nextStep = function(train_fold.disc, test_fold.disc) {
+
+                trainAndTest(train_fold.disc, test_fold.disc, "xgbTree")
+            })
+    })
+mlp_simple_value
+# 0.5538605
+```
+
+
+
+
+```{r}
+source("external.R")
+
+data.subset <- data.fullRecords %>%
+    mutate(remaining = minutes_remaining * 60 + seconds_remaining) %>%
+    mutate(xbin = cut(loc_x, breaks = 15, labels = FALSE),
+           ybin = cut(loc_y, breaks = 15, labels = FALSE)) %>%
+    mutate(xybin = as.factor(filterName2(paste(xbin, ybin)))) %>%
+    subset(select = -c(game_date,
+                       shot_distance,
+                       loc_x, loc_y,
+                       xbin, ybin,
+                       action_type,
+                       shot_zone_area, shot_zone_basic, shot_zone_range,
+                       combined_shot_type, shot_type,
+                       game_event_id, game_id,
+                       minutes_remaining, seconds_remaining))
+
+# Se pone la clase al final
+data.subset <- moveToLast( data.subset, "shot_made_flag" )
+
+mdlpDiscretizer <- function(dataset) {
+    set.seed(123)
+    ret <- mdlp(dataset)
+    list(dataset = ret$Disc.data, cutpoints = ret$cutp )
+}
+
+#ggplot(data.subset, aes(loc_x, loc_y, color = xybin)) +
+#    geom_point(size = 0.5, alpha = 0.8) +
+#    theme(axis.title = element_blank(),
+#          axis.text  = element_blank(),
+#          axis.ticks = element_blank(),
+#          legend.position = "none")
+
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        preprocessAll(train_fold, test_fold, method = c( "center", "scale" ),
+            nextStep = function(train_fold.pre, test_fold.pre) {
+
+                discretize(train_fold.pre, test_fold.pre, discretizer = mdlpDiscretizer,
+                    nextStep = function(train_fold.disc, test_fold.disc) {
+
+                        trainAndTest(train_fold.disc, test_fold.disc, "mlp")
+                    })
+            })
+    })
+mlp_simple_value
+```
+
+
+
+
+
+########################################################################################################################
+# PRUEBAS!!!
+########################################################################################################################
+
+# Prueba de clustering
+https://cran.r-project.org/web/packages/ClusterR/vignettes/the_clusterR_package.html
+https://rpubs.com/Joaquin_AR/310338
+
+```{r}
+library(ClusterR)
+library(factoextra)
+
+toClusterize <- data.fullRecords %>%
+    select(loc_x, loc_y, shot_made_flag)
+
+#fviz_nbclust(x = toClusterize, FUNcluster = kmeans, method = "wss", k.max = 15, 
+#             diss = get_dist(toClusterize, method = "euclidean"), nstart = 50)
+
+
+km_clusters <- kmeans(x = toClusterize, centers = 8, nstart = 50)
+
+toClusterize %>%
+    mutate(cluster = as.factor(km_clusters$cluster)) %>%
+    ggplot(aes(x = loc_x, y = loc_y, color = cluster)) +
+    geom_point(size = 0.5, alpha = 0.8) +
+    theme(legend.position = "none")
+
+```
+
+
+```{r}
+source("external.R")
+
+toClusterize <- data.fullRecords %>%
+    select(loc_x, loc_y, shot_made_flag)
+
+km_clusters <- kmeans(x = toClusterize, centers = 8, nstart = 50)
+
+# Las columnas minutes_remaining, seconds_remaining se agrupan en remaining
+# Se eliminan las columnas game_date, loc_x, loc_y, game_event_id, game_id, minutes_remaining, seconds_remaining
+data.subset <- data.fullRecords %>%
+    mutate(remaining = minutes_remaining * 60 + seconds_remaining, cluster = as.factor(km_clusters$cluster)) %>%
+    subset(select = -c(game_date,
+                       loc_x, loc_y, shot_distance,
+                       combined_shot_type, shot_type, action_type,
+                       shot_zone_area, shot_zone_basic, shot_zone_range,
+                       game_event_id, game_id,
+                       minutes_remaining, seconds_remaining))
+
+# Se pone la clase al final
+data.subset <- moveToLast( data.subset, "shot_made_flag" )
+
+mdlpDiscretizer <- function(dataset) {
+    set.seed(123)
+    ret <- mdlp(dataset)
+    list(dataset = ret$Disc.data, cutpoints = ret$cutp )
+}
+
+set.seed(123)
+mlp_simple_value <- split(data.subset, p = 0.75,
+    nextStep = function(train_fold, test_fold) {
+
+        preprocessAll(train_fold, test_fold, method = c( "center", "scale" ),
+            nextStep = function(train_fold.pre, test_fold.pre) {
+
+                discretize(train_fold.pre, test_fold.pre, discretizer = mdlpDiscretizer,
+                    nextStep = function(train_fold.disc, test_fold.disc) {
+
+                        trainAndTest(train_fold.disc, test_fold.disc, "mlp")
+                    })
+            })
+    })
+mlp_simple_value
+
+# 0.6774595 
+```
+
+
+
+```{r}
+#--Discretization using the ChiMerge method
+data(iris)
+
+xxx <- iris %>% subset(select = c( Sepal.Length,  Species))
+yyy <- mdlp(xxx)
+zzz <- yyy$Disc.data
+iris$Sepal.Length <- factor(make.names(zzz$Sepal.Length), ordered = TRUE)
+
+iris_num         <- iris[ , (unlist(lapply(iris, is.numeric)))]
+iris_num$Species <- iris$Species
+disc             <- chiM(iris_num, alpha = 0.05)
+
+#--cut-points
+disc$cutp
+#--discretized data matrix
+disc.data <- disc$Disc.data
+cutp      <- disc$cutp
+```
+
+
+```{r}
+data(BloodBrain)
+# one variable has one unique value
+## Not run: 
+xpreProc <- preProcess(bbbDescr)
+bbbDescr$negative <- factor(bbbDescr$negative)
+
+xpreProc  <- preProcess(bbbDescr[1:100, ], method = c( "center", "scale"))
+xtraining <- predict(xpreProc, bbbDescr[1:100, ])
+xtest     <- predict(xpreProc, bbbDescr[101:208, ])
+```
+
+
+
+
+
+
+```{r}
+exit()
+library(e1071)
+input <- read.csv("data.csv", sep = "," ,stringsAsFactors = FALSE)
+
+cat("splitting data to train and test......\n")
+train <- input[!is.na(input$shot_made_flag),]
+test <- input[is.na(input$shot_made_flag),]
+cat("precessing the train data......\n")
+train$shot_made_flag <- as.factor(train$shot_made_flag)
+train$shot_made_flag <- factor(train$shot_made_flag, levels = c("1", "0"))
+
+#handle with the train features
+train$shot_distance[train$shot_distance>40] <- 40
+train$time_remaining <- train$minutes_remaining*60+train$seconds_remaining;
+
+#normalize function
+myNormalize <- function (target) {
+  (target - min(target))/(max(target) - min(target))
+}
+train$shot_distance <- myNormalize(train$shot_distance)
+train$time_remaining <- myNormalize(train$time_remaining)
+dat <- data.frame(train$shot_distance, train$time_remaining, train$shot_made_flag)
+colnames(dat) <- c("shot_distance", "time_remaining", "shot_made_flag")
+
+#handle with the test features
+test$shot_distance[test$shot_distance>40] <- 40
+test$time_remaining <- test$minutes_remaining*60+test$seconds_remaining;
+test$shot_distance <- myNormalize(test$shot_distance)
+test$time_remaining <- myNormalize(test$time_remaining)
+test_dat <- data.frame(test$shot_distance, test$time_remaining, test$shot_made_flag)
+colnames(test_dat) <- c("shot_distance", "time_remaining", "shot_made_flag")
+#build svm model by train data
+wts=c(1,1)
+names(wts)=c(1,0)
+model <- svm(shot_made_flag~., data=dat, kernel="radial",  gamma=1, cost=1, class.weights=wts)
+
+#show accuracy by train data
+pred <- predict(model, dat[,-3])
+table(dat[,3],pred)
+
+#svm model predict the test data
+newdata <- data.frame(test_dat[,-3])
+pred <- predict(model, newdata)
+```
+
+
+```{r}
+x_test_set <- dat[,-3]
+y_test_set <- dat[[ 3 ]]
+y_pred <- predict(model, x_test_set)
+#table(dat[,3],pred)
+
+# Se calcula la matriz de confusión y la precisión
+cm       <- confusionMatrix(y_pred, y_test_set)
+accuracy <- cm$overall["Accuracy"]
+accuracy
+
+```
+
+
+
+## PRUEBAS
+
+
+```{r}
+#ggplot() +
+#  geom_line(data = data.fullRecords, aes(x = shot_distance, y = shot_zone_range, group = 1), size = 0.5) +
+#  geom_hline(yintercept = 0) +
+#  labs(x="shot_distance", y="shot_zone_range")
+```
+
+
+Se utiliza el test de independecia de Chi-square sobre las variables: action_type y combined_shot_type.
+- Hipótesis nula: las dos variables son independientes
+- Hipótesis alternativa: las dos variables NO son independientes
+
+Se obtiene un p-value < 2.2e-16, que es menor que el nivel de significancia (0.05), por lo que podemos rechazar la hipótesis nula y concluir que las dos variables No son independientes.
+
+```{r}
+#ggplot(data.fullRecords, aes(combined_shot_type, action_type, color = shot_made_flag)) + geom_point()
+#qplot(x = action_type, data = data.fullRecords, geom = "bar", fill = combined_shot_type)
+
+# Tabla de contingencia
+#table(data.fullRecords$action_type, data.fullRecords$combined_shot_type)
+# Chi-square test of independence
+# The null hypothesis of the test: the two variables are independent
+# the alternative hypothesis: the two variables are not independent
+chisq.test(data.fullRecords$action_type, data.fullRecords$combined_shot_type)
+```
+
+Se visualiza la relación entre lat/loc_y y lon/loc_x.
+
+El p-value del test es < 2.2e-16, que es menor que el nivel de significancia alfa = 0.05, podemos concluir que  lon y loc_x están significativamente correladas con un coeficiente de correlación de 1 y p-value < 2.2e-16. Respecto a lat y loc_y ocurre exactamente igual, pero en este caso, el coeficiente de correlación es -1.

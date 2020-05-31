@@ -1,0 +1,909 @@
+---
+title: "Proyecto Kaggle - Kobe Bryant Shot Selection"
+author: "José Luis Rovira Martín"
+date: "9/2/2020"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(error = FALSE)
+knitr::opts_chunk$set(fig.width = 10)
+knitr::opts_chunk$set(fig.height = 10)
+
+#install.packages("ggpubr")
+library(rlang)
+
+library(caret)
+#library(questionr)
+
+library(discretization)
+#library(arulesCBA)
+
+library(gridExtra)
+library(grid)
+#library(lattice)
+library(forcats) 
+
+library(dplyr)
+
+library(corrplot)
+library(GGally)
+library(ggridges)
+library(ggpubr)
+library(dplyr)
+
+library(ClusterR)
+library(factoextra)
+
+library(infotheo)
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install(c("FCBF"))
+library(FCBF)
+
+#library(MVN)
+#library(rlang)
+library(car)
+
+library(RColorBrewer)
+
+suppressMessages(library(ggplot2))
+suppressMessages(library(mgcv))
+suppressMessages(library(splines))
+```
+
+```{r shared-code, include=FALSE, message=FALSE, warning=FALSE}
+source("external.R")
+source("prepare-data.R")
+```
+
+
+```{r}
+plotData_accuracy_v1 <- function(dataset, varName) {
+    tmp <- dataset %>%
+        mutate(var = dataset[[ varName ]]) %>%
+        select(var, shot_made_flag) %>%
+        mutate(value = as.numeric(as.character(shot_made_flag))) %>%
+        group_by(var) %>%
+        summarise(avg = mean(value), n = n(), sd = sd(value), se = sd/sqrt(n)) %>%
+        mutate(min = avg - se, max  = avg + se) %>%
+        arrange( desc(avg) )
+
+    p1 <- tmp %>%
+        ggplot(aes(x = reorder(var, -n) )) +
+        geom_bar(aes(weight = avg, fill = avg), width = 0.2) +
+        #geom_errorbar(aes(ymin = min, ymax  = max, width = 0.1)) +
+        scale_fill_gradient(low = "red", high = "green", limits = c(0, 1)) +
+        theme_bw() +
+        theme(legend.position = "none",
+              axis.text.x     = element_blank(),
+              axis.title.x    = element_blank(),
+              plot.title      = element_blank())
+
+    p2 <- tmp %>%
+        ggplot(aes(x = reorder(var, -n) )) +
+        geom_bar(aes(weight = n, fill = avg), width = 0.2)  +
+        scale_fill_gradient(low = "red", high = "green", limits = c(0, 1)) +
+        theme_bw() +
+        theme(legend.position = "none",
+              axis.text.x     = element_text(angle = 45, hjust = 1),
+              axis.title.x    = element_blank(),
+              plot.title      = element_text(hjust = 0.5))
+
+    grid.arrange(p1, p2, layout_matrix = cbind(c(1, 2)))
+}
+
+plotData_accuracy_v2 <- function(dataset, groupByName, ggextra = function(ggplot) { ggplot }) {
+    tmp <- dataset %>%
+        mutate(group = dataset[[ groupByName ]], value = as.numeric(as.character(shot_made_flag))) %>%
+        group_by(group) %>%
+        summarise(accuracy = mean(value), n = n(), sd = sd(value), se = sd/sqrt(n))
+
+    p1 <- ggextra(
+            ggplot(data = tmp, aes(x = group, y = accuracy, colour = accuracy)) +
+            geom_line(size = 1.5) +
+#        geom_point(size = 2)  +
+#        scale_color_gradient(low = "red", high = "green") +
+#        geom_smooth(aes(color=..y..), size = 1.5, se = FALSE) +
+            scale_color_gradient2(low = "red", mid = "yellow" , high = "seagreen", midpoint = median(tmp$accuracy))
+        ) +
+        theme(
+            legend.position="none",
+            plot.title      = element_blank(),
+            panel.background = element_rect(fill = "transparent"),
+            panel.grid.major.x = element_blank(),
+            panel.grid.major.y = element_line(size = .15, color="gray15"),
+            axis.text    = element_text(family = 'NimbusSan', size = 12),
+            axis.text.x  = element_blank(),
+            axis.title.x = element_blank(),
+            axis.title.y = element_text(family = 'NimbusSan', size = 14),
+        )
+
+    p2 <- ggextra(
+            ggplot(data = tmp, aes(x = group, y = n, color = n)) +
+            geom_line(size = 1.5) +
+#        geom_bar(width = 0.2) +
+#        geom_errorbar(aes(ymin = min, ymax  = max, width = 0.1)) +
+#        scale_fill_gradient(low = "red", high = "green", limits = c(0, 1)) +
+            scale_color_gradient2(low = "red", mid = "yellow" , high = "seagreen", midpoint = median(tmp$n))
+        ) +
+        theme(
+            legend.position="none",
+            plot.title      = element_blank(),
+            panel.background = element_rect(fill = "transparent"),
+            panel.grid.major.x = element_blank(),
+            panel.grid.major.y = element_line(size = .15, color="gray15"),
+            axis.text    = element_text(family = 'NimbusSan', size = 12),
+            axis.text.x  = element_text(angle = 45),
+            axis.title.x = element_text(family = 'NimbusSan', size = 14),
+            axis.title.y = element_text(family = 'NimbusSan', size = 14)
+        )
+    
+    grid.arrange(p1, p2, ncol = 1)
+}
+```
+
+# Introducción
+
+El dataset de [Kaggle](https://www.kaggle.com/) de [Kobe Bryant](https://www.kaggle.com/c/kobe-bryant-shot-selection) contiene una selección de tiros realizados por dicho jugador durante su carrera mientras jugaba con Los Angeles Lakers en la NBA. Los datos se centran en la descripción de las características cualitativas y cuantitativas que determinan si un tiro entra o no en canasta.
+
+La dataset contiene 30697 observaciones, de las cuales 25697 indican si Kobe Bryant encanasta. Las 5000 restantes no indican este atributo, y se toma como datos de prueba para la competición. Nos encontramos con problema de clasificación (no de regresión).
+
+Para evaluar la calidad del modelo, se utiliza como medida de evaluación, LogLoss:
+
+$H_q(p) = - \frac{1}{N} \sum_{i=1}^{N} y_i \cdot log(p(y_i)) + (1 - y_i) \cdot log(1 - p(y_i))$
+
+El trabajo está dividido en las siguientes secciones:
+
+* Descripción de las variables: describe las variables que forman parte del dataset
+* Estudio de las variables: se estudian las variables del conjunto de datos.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+data <- read.csv("data.csv")
+
+#summary(data)
+#str(data)
+#describe(data)
+#cat("names =", names(data), "\n")
+#head(data)
+#tail(data)
+
+# Numero de datos N/A
+print(paste("Datos NA: ", sum(is.na(data))))
+
+# Se separan los datos en completos + testing
+data.fullRecords <- data[ complete.cases(data), ]
+data.testRecords <- data[ !complete.cases(data), ]
+```
+
+## Descripción de las variables
+
+El dataset contiene 25 variables, de las cuales 10 son discretas, 14 numéricas y la clase a predecir (discreta).
+
+Los valores N/A (de *shot_made_flag*) son sobre los que se pide realizar la predicción.
+
+Atributos:
+
+- *shot_id*: identificador del disparo. Entero.
+- *game_event_id*: identificador del evento. Entero.
+- *game_id*: identificador del juego. Entero.
+- *team_id*: identificador del equipo. Entero.
+- *team_name*: nombre del equipo. Texto.
+
+- *game_date*: fecha del juego. Fecha.
+- *season*: periodo en el que se jugó el partido. Texto con 20 diferentes valores: *1996-97*, *1997-98*, *1998-99*, etc.
+
+- *matchup*: texto que indica quienes juega. Texto con 74 valores diferentes.
+- *opponent*: texto que indica el oponente. Texto con 33 valores diferentes.
+- *playoffs*: indica si es un juego de playoffs.
+
+- *minutes_remaining*: minutos que faltan para finalizar el periodo. Entero con 12 valores: [0, 11].
+- *seconds_remaining*: segundos que faltan para finalizar el periodo. Entero con 60 valores: [0, 59].
+- *period*: periodo de juego. Entero con 7 niveles: [1, 7].
+
+- *lat*: latitud del disparo. Valor real: [33.25, 34.09].
+- *lon*: longitud del disparo. Valor real: [-118.5, -118.0].
+- *loc_x*: localización en el eje X del disparo. Valor real: [-250, 250].
+- *loc_y*: localización en el eje Y del disparo. Valor real: [-44, 800].
+
+- *action_type*: indica la acción que realiza para disparar, así como el tipo de disparo. Factor con 57 niveles: *Jump Shot*, *Layup Shot*, *Driving Layup Shot*, *Turnaround Jump Shot*, *Fadeaway*, etc.
+- *combined_shot_type*: indica el tipo de disparo. Factor con 6 niveles: *Bank Shot*, *Dunk*, *Hook Shot*, *Jump Shot*, *Layup* y *Tip Shot*. 
+
+- *shot_distance*: distancia de disparo. Valor real: [0, 79].
+- *shot_type*: indica si el tiro es de 2 puntos o 3.
+- *shot_zone_area*: zona de disparo. Factor con 6 niveles. *Back Court(BC)*, *Center(C)*, *Left Side Center(LC)*, *Left Side(L)*, *Right Side Center(RC)* y *Right Side(R)*.
+- *shot_zone_basic*: zona de disparo. Factor con 7 niveles: *Above the Break 3*, *Backcourt*, *In The Paint (Non-RA)*, *Left Corner 3*, *Mid-Range*, *Restricted Area* y *Right Corner 3*.
+- *shot_zone_range*: zona de disparo. Factor con 5 niveles: *16-24 ft.*, *24+ ft.*, *8-16 ft.*, *Back Court Shot* y *Less Than 8 ft.*.
+
+- *shot_made_flag*: indica si ha encanastado. Clase.
+
+El dataset solo presenta datos *NA* en la variable *shot_made_flag* para indicar que no se conoce el valor de la clase (hay que evaluarla).
+
+## Estudio de las variables
+
+1. *lat*, *lon* vs *loc_x*, *loc_y*. Calculando la correlación (*stats::cor*) entre lat/lon y loc_x/lox_y, se puede ver que ambos pares están totalmente correlados: la correlación entre *lat* y *loc_y* es -1 y entre *lon* y *loc_x* es 1. Se descartan las variables **lat** y **lon**.
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+data.filtered <- dataTransformation( prepare( data.fullRecords ) )
+
+# Existe correlación perfecta entre (lat, lon) y (loc_x, loc_y)
+# se descarta lat, lon
+cor <- stats::cor( data$lat, data$loc_y )
+print("Correlation lat, loc_y: ")
+print(cor)
+
+cor <- stats::cor( data$lon, data$loc_x )
+print("Correlation lon, loc_x: ")
+print(cor)
+```
+
+2. *shot_zone_range*. Si comparamos *shot_zone_range* con la distancia real calculada a partir de *loc_x* y *loc_y* ($\frac{\sqrt{loc_x^2 + loc_y^2}}{10}$), se puede comprobar que el factor *24+ ft.* no está correctamente calculado.
+
+Factor          | Mínimo            | Máximo
+----------------|-------------------|------------------
+Less Than 8 ft. |  0                |  8
+8-16 ft.        |  8.00062497558784 | 16
+16-24 ft.       | 16.0003124969483  | 23.7261459154242
+24+ ft.         | 22                | 45.6724205620854
+Back Court Shot | 40.0001249998047  | 79.1818792401393
+
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+aux <- data %>%
+    mutate(length = sqrt(data$loc_x**2 + data$loc_y**2) / 10) %>%
+    select(shot_zone_range, length, loc_y)
+
+printDistance <- function(dataset, factor) {
+    tmp  <- aux %>% filter(shot_zone_range == factor)
+    print(paste(factor,
+                ": distancia [", min(tmp$length), ", ", max(tmp$length), "]",
+                " Y [", min(tmp$loc_y), ", ", max(tmp$loc_y), "]"))
+}
+
+printDistance(aux, "Less Than 8 ft.")
+printDistance(aux, "8-16 ft.")
+printDistance(aux, "16-24 ft.")
+printDistance(aux, "24+ ft.")
+printDistance(aux, "Back Court Shot")
+```
+
+Además utiliza un corte basado en la linea de medio campo (con **loc_y** = *396*) que no resulta natural, es más lógico cortar por distancia a canasta. Se descarta la variable *shot_zone_range*.
+
+3. *action_type* vs *combined_shot_type*. Para comprobar si ambas comparten la misma información, se realiza una consulta agrupada al dataset. En dicha consulta se puede comprobar la relación univoca de **combined_shot_type** a *action_type*:
+
+| *combined_shot_type* | *action_type* |
+|:--|:--|
+| *Bank Shot* | Driving Bank shot, Hook Bank Shot, Pullup Bank shot, Running Bank shot, Turnaround Bank shot |
+| *Dunk*      | Alley Oop Dunk Shot, Driving Dunk Shot, Driving Slam Dunk Shot, Dunk Shot, Follow Up Dunk Shot, Putback Dunk Shot, Putback Slam Dunk Shot, Reverse Dunk Shot, Reverse Slam Dunk Shot, Running Dunk Shot, Running Slam Dunk Shot, Slam Dunk Shot |
+| *Hook Shot* | Driving Hook Shot, Hook Shot, Running Hook Shot, Turnaround Hook Shot |
+| *Jump Shot* | Driving Floating Bank Jump Shot, Driving Floating Jump Shot, Driving Jump shot, Fadeaway Bank shot, Fadeaway Jump Shot, Floating Jump shot, Jump Bank Shot, Jump Hook Shot, Jump Shot, Pullup Jump shot, Running Jump Shot, Running Pull-Up Jump Shot, Step Back Jump shot, Turnaround Fadeaway Bank Jump Shot, Turnaround Fadeaway shot, Turnaround Jump Shot |
+| *Layup*     | Alley Oop Layup shot, Cutting Finger Roll Layup Shot, Cutting Layup Shot, Driving Finger Roll Layup Shot, Driving Finger Roll Shot, Driving Layup Shot, Driving Reverse Layup Shot, Finger Roll Layup Shot, Finger Roll Shot, Layup Shot, Putback Layup Shot, Reverse Layup Shot, Running Finger Roll Layup Shot, Running Finger Roll Shot, Running Layup Shot, Running Reverse Layup Shot, Tip Layup Shot, Turnaround Finger Roll Shot |
+| *Tip Shot*  | Running Tip Shot, Tip Shot |
+
+
+Puesto que **action_type** contiene una mayor información, se descarta **combined_shot_type**.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+source("external.R")
+source("prepare-data.R")
+
+data.distinct <- data %>%
+    select(action_type, combined_shot_type) %>%
+    group_by(action_type, combined_shot_type) %>%
+    distinct()
+
+# Pinta la tabla
+#table <- data %>%
+#    select(combined_shot_type, action_type) %>%
+#    arrange(combined_shot_type, action_type) %>%
+#    mutate(mix = paste("| ", combined_shot_type, " | ", action_type, " |")) %>%
+#    select(mix) %>%
+#    distinct()
+
+# Pinta la tabla
+#graph <- data %>%
+#    select(combined_shot_type, action_type) %>%
+#    arrange(combined_shot_type, action_type) %>%
+#    mutate(mix = paste("\"", action_type, " \" -> \"", combined_shot_type, "\"")) %>%
+#    select(mix) %>%
+#    distinct()
+```
+
+4. *shot_zone_basic* vs *shot_type*. Ambas variables contienen información similar tal y como se puede ver en las siguientes gráficas.
+
+```{r fig.height=15, fig.width=15}
+source("external.R")
+source("prepare-data.R")
+
+plotSimple <- function(data, color, title) {
+    data %>% ggplot() +
+    geom_point(aes(loc_x, loc_y), size = 2, alpha = 0.8, color = color) +
+    xlim(-250, 250) +
+    ylim(-50, 900) +
+    ggtitle(title) +
+    theme(legend.position = "none",
+            axis.text.x     = element_blank(),
+            axis.text.y     = element_blank(),
+            axis.title.x    = element_blank(),
+            axis.title.y    = element_blank())
+}
+
+p1 <- data %>%
+    select(loc_x, loc_y, shot_type) %>%
+    filter(shot_type != "2PT Field Goal") %>%
+    plotSimple("blue", "shot_type = 3PT Field Goal")
+
+p2 <- data %>%
+    select(loc_x, loc_y, shot_type) %>%
+    filter(shot_type == "2PT Field Goal") %>%
+    plotSimple("red", "shot_type = 2PT Field Goal")
+
+#grid.arrange(p1, p2, ncol = 2)
+
+p3 <- data %>%
+    select(loc_x, loc_y, shot_zone_basic) %>%
+    filter(shot_zone_basic == "Above the Break 3"
+           | shot_zone_basic == "Backcourt"
+           | shot_zone_basic == "Left Corner 3"
+           | shot_zone_basic == "Right Corner 3") %>%
+    plotSimple("blue", "shot_zone_basic = Above the Break 3, Backcourt, Left Corner 3, Right Corner 3")
+
+p4 <- data %>%
+    select(loc_x, loc_y, shot_zone_basic) %>%
+    filter(shot_zone_basic == "Mid-Range"
+           | shot_zone_basic == "In The Paint (Non-RA)"
+           | shot_zone_basic == "Restricted Area") %>%
+    plotSimple("red", "shot_zone_basic = Range, In The Paint (Non-RA), Restricted Area")
+
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+Psicológicamente, la linea de triple puede afectar a la hora de realizar el tiro, sin embargo se puede ver como la variable *shot_type* no está bien clasificado, por lo que se descarta dicha variable y se recalcula a partir de la información de *shot_zone_basic*, llamada *three_points* con los factores: *Above the Break 3*, *Backcourt*, *Left Corner 3* y *Right Corner 3*.
+
+5. *shot_zone_area* y *shot_zone_basic*. Ambas variables describen la localización del disparo en base a una clasificación de las zonas del campo. Una mejor forma de representar dicha información está basada en las variables *loc_x* y *loc_y*. Si se aplica un algoritmo de clusterización sobre ambas variables, se puede ver como el resultado describe mejor las zonas de tiro. En las siguientes gráficas se puede apreciar lo comentado.
+
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+# https://cran.r-project.org/web/packages/ClusterR/vignettes/the_clusterR_package.html
+# https://rpubs.com/Joaquin_AR/310338
+
+source("external.R")
+source("prepare-data.R")
+
+# Se convierten, game_date y season, en variables numéricas.
+tmp <- dataTransformation( prepare( data.fullRecords ) )
+
+km_clusters <- tmp %>% select(loc_x, loc_y) %>%
+    kmeans(iter.max = 20, centers = 8, nstart = 50)
+
+p1 <- data.filtered %>%
+    mutate(cluster = as.factor(km_clusters$cluster)) %>%
+    ggplot(aes(x = loc_x, y = loc_y, color = cluster)) +
+    geom_point(size = 2, alpha = 0.8) +
+    theme(legend.position = "none")
+
+p2 <- data.filtered %>%
+    ggplot(aes(x = loc_x, y = loc_y, color = shot_zone_area)) +
+    geom_point(size = 2, alpha = 0.8) +
+    theme(legend.position = "none")
+
+p3 <- data.filtered %>%
+    ggplot(aes(x = loc_x, y = loc_y, color = shot_zone_basic)) +
+    geom_point(size = 2, alpha = 0.8) +
+    theme(legend.position = "none")
+
+grid.arrange(p1, p2,p3, ncol = 3)
+```
+
+Tal y como se ha comentado, los clusters recogen prácticamente toda la información necesaria.
+
+Se descartan las variables *shot_zone_basic* y *shot_zone_area* y se crea una nueva variable, *cluster*.
+
+6. *Game_date* vs *season*. Ambos datos tienen una fuerte realación (0.9994211), por lo que se descarta **Game_date**.
+
+```{r, include=FALSE}
+source("external.R")
+source("prepare-data.R")
+
+# Se convierten, game_date y season, en variables numéricas.
+tmp <- dataTransformation( prepare( data.fullRecords ) ) %>%
+    mutate(game_dateN = as.numeric(game_date),
+           seasonN = c(1:20)[as.numeric(season)]) %>%
+    select(game_dateN, seasonN)
+
+# Existe correlación muy fuerte  entre game_date y season
+# se descarta game_date
+cor <- cor( tmp$game_dateN, tmp$seasonN )
+print("Correlation game_date, season: ")
+print(cor)
+```
+
+7. *shot_id*, *team_id*, *team_name*, *game_id*, *game_event_id*. Estas variables representan identificadores que no ofrecen ninguna información útil para la clasificación.
+
+## Variables derivadas
+
+1. La posición de tiro está modelada como pares de coordenadas (x, y). Sin embargo, es más natural modelar dicha posición mediante la distancia a la canasta (cuanto más lejos, más difícil acertar) y el ángulo respecto de la misma (ángulos perpendiculares a la canasta, facilitan el enceste por la existencia del tablero), es decir, coordenadas polares. Aúnque exista la variable shot_distance, se va a calcular directamente la distancia a partir de la posicion x e y. Esto evita los posibles errores de cálculo.
+
+  $shot\_distance = \sqrt{ loc\_x^2 + loc\_y^2}$
+
+  $shot\_angle = atan2( loc\_x, loc\_y )$
+
+La matriz de correlación muestra como la distancia tiene una mayor dependencia de la variable Y (0.8172297): el rango de X en *valor absoluto* [0, 250] es menor que el de Y [0, 800], lo que le da un mayor peso en la fórmula. En el caso del ángulos, tiene mayor dependencia con X (0.8763034): la geometría del campo (alargado en Y) y la posición de la canasta (centrada en los extremos), influye en esto. Las coordenadas polares (ángulo/distancia) modelan mejor un tiro a canasta.
+
+```{r message=FALSE, warning=FALSE}
+source("external.R")
+source("prepare-data.R")
+
+tmp <- dataTransformation( prepare( data.fullRecords ) ) %>%
+    mutate(shot_made_flag = as.factor(shot_made_flag)) %>%
+    select(loc_y, loc_x, shot_distance, shot_angle, shot_made_flag)
+tmp <- moveToLast(tmp, "shot_made_flag")
+
+ggpairs(tmp, aes(color = shot_made_flag), progress = FALSE)
+
+cor <- cor( tmp$loc_x, tmp$shot_angle )
+print("Correlation loc_x, shot_angle: ")
+print(cor)
+
+cor <- cor( tmp$loc_y, tmp$shot_distance )
+print("Correlation loc_y, shot_distance: ")
+print(cor)
+```
+
+2. En vez de expresar el tiempo de juego restante hasta el final del periodo como dos variables independientes, minutos y segundos restantes, es mejor opción combinar ambas en tiempo restantes y descartarlas.
+
+   $remaining = minutes\_remaining * 60 + seconds\_remaining$
+
+3. La variable **matchup** indica que dos equipos juegan el partido. Uno de los equipos es siempre LAL (Kobe Bryant juega en Los Angeles Lakers) y el otro corresponde a la variable **opponent**. La única información extra que se puede optener de esta variable es si juega en casa o fuera, y viene indicado por el símbolo *@* o *vs.*. Esta información se extrae en la variable **home**, y se descarta **matchup**.
+
+   $home = !grepl("\@", as.character(matchup))$
+
+# Relación entre remaining, shot_angle, shot_distance, period, playoffs, home, season
+
+La siguiente gráfica, muestra la relación a pares entre las variables numéricas.
+
+```{r fig.height=40, fig.width=40}
+source("external.R")
+source("prepare-data.R")
+
+tmp <- dataTransformation( prepare( data.fullRecords ) ) %>%
+    mutate(periodN = as.numeric(as.character(period)),
+           playoffsN = as.numeric(as.character(playoffs)),
+           homeN = as.numeric(home),
+           game_dateN = as.numeric(game_date),
+           seasonN = c(1:20)[as.numeric(season)],
+           shot_made_flag = as.factor(shot_made_flag)) %>%
+    select(remaining, shot_angle, shot_distance, periodN, playoffsN, homeN, seasonN, shot_made_flag)
+tmp <- moveToLast(tmp, "shot_made_flag")
+
+ggpairs(selectNumericAndClass(tmp), aes(color = shot_made_flag), progress = FALSE)
+```
+
+# Gráficas de precisión
+
+Se muestran las gráficas de precisión y número de intentos. Esto permite hacernos una idea de cual es el rendimiento de Kobe Bryant.
+
+El gran número de variables de *action_type* hace que sea difícil su estudio, por lo que se reduce su número agrupando aquellas que tienen poca representación (con una probabilidad menor que cierto nivel). Esto permite ver que la variable mas representada es *Jump Shot*, pero con una probabilidad de acierto menor de 0,37. Por otro lado, *Slam Dunk Shot* y *Driving Dunk Shot* tienen una precisión cercana al 100%, pero poca representación.
+
+Si nos fijamos en *combined_shot_type*, se confirma que el *Jump Shot* es el tipo de tiro preferido por Kobe, pero tiene una baja efectividad. El más efectivo es *Dunk*, cercano al 100% y *Bank shot* con más de un 75%. El *Tip Shot* es el menos efectivo, por debajo del 40%.
+
+En las zonas de tiro, realiza mas intentos desde *Mid Range* pero con efectividad cercana al 40%, mientras que en *Restricted Area* supera el 60%.
+
+Para las areas de tiro, tiene preferencia por la zona *Center (C)* con más del 50% de efectividad. Los tiros de *Back Court (BC)* realiza pocos con una efectividad casi del 0%. El resto de areas están muy igualadas, con efectividad de entre el 35-40%.
+
+La efectividad respecto al contrincante, es muy similar en todos los casos, entre 40-50%, sin embargo si varía mucho el número de intentos que realiza.
+
+Finalmente jugar en casa o fuera, no tiene un gran efecto en la eficacia ni en el número de intentos.
+
+
+
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+data.filtered <- dataTransformation( prepare( data.fullRecords ) )
+
+km_clusters <- data.filtered %>% select(loc_x, loc_y) %>%
+    kmeans(iter.max = 20, centers = 8, nstart = 50)
+
+data.filtered <- data.frame(cluster = as.factor(km_clusters$cluster), data.filtered)
+
+
+levels(data.filtered$action_type) <- mergeLevels( data.filtered, "shot_made_flag", "action_type", 1)
+
+# action_type
+plotData_accuracy_v1(data.filtered, "action_type")
+
+# combined_shot_type
+plotData_accuracy_v1(data.filtered, "combined_shot_type")
+
+# shot_type
+#plotData_accuracy_v1(data.filtered, "shot_type")
+
+# shot_zone_basic
+#plotData_accuracy_v1(data.filtered, "shot_zone_basic")
+
+# shot_zone_area
+#plotData_accuracy_v1(data.filtered, "shot_zone_area")
+
+# Cluster
+plotData_accuracy_v1(data.filtered, "cluster")
+
+# opponent
+plotData_accuracy_v1(data.filtered, "opponent")
+
+# home
+plotData_accuracy_v1(data.filtered, "home")
+```
+
+## Atributos respecto a la localización
+
+En las siguientes gráficas, se muetran los atributos respecto a la localización.
+
+El tipo de tiro *Jump Shot* lo ejecuta practicamente desde cualquier posición, y como se ha comentado, es el que más realiza.
+
+
+```{r fig.height=15, fig.width=15, message=FALSE, warning=FALSE}
+source("external.R")
+source("prepare-data.R")
+source("plot.R")
+
+data.filtered <- dataTransformation( prepare( data.fullRecords ) ) %>% mutate(shot_made_flag = as.factor(shot_made_flag))
+levels(data.filtered$action_type) <- mergeLevels( data.filtered, "shot_made_flag", "action_type", 1)
+
+data.filtered$shot_distance <- ifelse( data.filtered$loc_y >= 0, data.filtered$shot_distance, -data.filtered$shot_distance )
+
+
+createDefColors <- function(levels) {
+    c <- I(brewer.pal(length(levels), name = 'Dark2'))
+    colors <- structure(c, names = levels)
+    colors
+}
+createDefValues <- function(levels, value) {
+    values  <- structure(rep(value, length(levels)), names = levels)
+    values
+}
+
+l <- levels(data.fullRecords$combined_shot_type)
+color  <- createDefColors(l)
+sizes  <- createDefValues(l, 1)
+alphas <- createDefValues(l, 0.8)
+
+sizes["Jump Shot"] <- 0.2
+alphas["Jump Shot"] <- 0.2
+
+#ggplot(data.filtered, aes(loc_x, loc_y)) +
+#    geom_point(aes(color = combined_shot_type, size = combined_shot_type, alpha = combined_shot_type)) +
+#    scale_color_manual(values = as.vector(colors)) +
+#    scale_size_manual(values = as.vector(sizes)) +
+#    scale_alpha_manual(values = as.vector(alphas))
+
+
+# action_type
+plotDataXY(data.filtered, "action_type")
+
+# shot_zone_basic
+plotDataXY(data.filtered, "combined_shot_type")
+
+# shot_zone_area
+plotDataXY(data.filtered, "shot_zone_area")
+
+# shot_zone_basic
+plotDataXY(data.filtered, "shot_zone_basic")
+```
+
+# Rendimiento en función del tiempo
+
+Como se aprecian en las gráfica de tiempo restante, el mayor número de tiros de Kobe Bryant se producen al final de cada periodo, pero con una tasa de acierto muy baja. Durante el resto del perido, se mantiene entre [0.4, 0,5], salvo los primeros 3,6 minutos, en donde hay una mayor variación.
+
+En la gráfica por temporada, muestra un rendimiento muy estable durante casi toda su trayectoria, entre el 42-48%, decayendo hacia sus últimos años en activo. También se puede ver como el número de intentos muestra una gráfica de V invertida, con un pico final. Esta anomalía en las temporadas cercanas a la última, son debidas a una lesión que le aparto del terreno de juego durante 21 partidos.
+
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+# Constantes
+
+sgroup  <- 20
+q12     <- 12*60
+q5      <- 5*60
+qend    <- q12*4
+qmax    <- qend + q5*3
+qbreaks <- c(0, q12, q12*2, q12*3, qend, qend+q5, qend+q5*2, qmax)
+qlabels <- c( 0, 12, 12*2, 12*3, 12*4, 12*4 + 5, 12*4 + 5*2, 12*4 + 5*3)
+
+
+data.filtered <- dataTransformation( prepare( data.fullRecords ) ) %>%
+    mutate(shot_made_flag = as.factor(shot_made_flag))
+
+
+# Rendimiento por minuto
+
+tmp <- data.filtered %>%
+    mutate(t = floor(remaining / sgroup)) %>%
+    select(t, shot_made_flag)
+
+sgroup  <- 5
+q12     <- 12*60
+ggextra <- function(ggplot) {
+    ggplot +
+        scale_x_continuous(name = paste("Tiempo restante (x", sgroup, " s)"), breaks = round(seq( 0, q12 / sgroup, by = 60 / sgroup ), 1) )
+}
+
+plotData_accuracy_v2(tmp, "t", ggextra)
+
+# Rendimiento por sesión
+
+tmp <- data.filtered %>%
+    mutate(season = as.numeric(season)) %>%
+    select(season, shot_made_flag)
+
+ggextra <- function(ggplot) {
+    ggplot +
+        scale_x_continuous(name="Sesión (año)")
+}
+
+plotData_accuracy_v2(tmp, "season", ggextra)
+
+# Rendimiento por periodo
+
+tmp <- data.filtered %>%
+    select(period, remaining, shot_made_flag) %>%
+    mutate(period = as.numeric(as.character(period)),
+           t = floor(ifelse(period <= 4,
+                                   (period-1)*q12 + (q12 - remaining),
+                            qend + (period-5)*q5  + (q5  - remaining)) / sgroup))
+
+ggextra <- function(ggplot) {
+    ggplot +
+        geom_vline(xintercept = qbreaks / sgroup) +
+        scale_x_continuous(name = "Tiempo (minutos)", breaks = qbreaks / sgroup, labels = qlabels)
+}
+
+plotData_accuracy_v2(tmp, "t", ggextra)
+
+# shot_distance
+
+#maxDistance <- round(sqrt(250**2 + 890**2))
+tmp <- data.filtered %>%
+    select(shot_distance, shot_made_flag) %>%
+    mutate(distance = floor(shot_distance))
+
+ggextra <- function(ggplot) {
+    ggplot +
+        scale_x_continuous(name="Distancia (pies)")
+}
+
+plotData_accuracy_v2(tmp, "distance", ggextra)
+
+# shot_angle
+
+tmp <- data.filtered %>%
+    select(shot_angle, shot_made_flag) %>%
+    mutate(angle = floor(180 * shot_angle / pi))
+
+ggextra <- function(ggplot) {
+    ggplot +
+        scale_x_continuous(name="Ángulo (grados)")
+}
+
+plotData_accuracy_v2(tmp, "angle", ggextra)
+```
+
+# Outliers
+
+```{r fig.height=20, fig.width=20, message=FALSE, warning=FALSE}
+library(mice)
+data.filtered <- norm(exclude(dataTransformation( prepare( data.fullRecords ) )))
+data.filtered <- data.filtered %>% select(shot_angle, shot_distance, remaining)
+
+outliers <- function(dataset, className) {
+    # Outliers multivariantes
+    mod    <- lm(formula(paste(className, " ~ ." )), data = dataset)
+    cooksd <- cooks.distance(mod)
+
+    #plot(cooksd, pch="*", cex = 2, main = paste("Influential Obs by Cooks distance (shot_angle)"))
+    #abline(h = 4*mean(cooksd, na.rm = TRUE), col = "red")
+    #text(x = 1:length(cooksd) + 1, y = cooksd, labels = ifelse(cooksd > 4*mean(cooksd, na.rm = TRUE), names(cooksd),""), col = "red")
+
+    influential <- as.numeric(names(cooksd)[(cooksd > 4*mean(cooksd, na.rm = TRUE))])
+    dataset[ influential, className ] <- NA
+
+    complete( mice(dataset, printFlag = F, seed = 3) )
+}
+
+data <- data.filtered
+data <- outliers(data, "shot_angle")
+print(paste("Datos NA: ", sum(is.na(data))))
+
+data <- outliers(data, "shot_distance")
+print(paste("Datos NA: ", sum(is.na(data))))
+
+data <- outliers(data, "remaining")
+print(paste("Datos NA: ", sum(is.na(data))))
+```
+
+
+# Discretización
+
+```{r}
+source("external.R")
+source("prepare-data.R")
+
+library(DMwR)
+data.filtered <- norm(exclude(dataTransformation(prepare( data.fullRecords ))))
+
+#coefNormal <- 1.5
+#coefExtremo <- 3
+#outliersIQR(data.filtered, match("remaining", names(data.filtered)), coefNormal)
+
+#outlier.scores <- lofactor(data.filtered$shot_angle, k=5)
+#plot(density(outlier.scores))
+
+aux <- data.filtered %>%
+    mutate(shot_made_flag = as.factor(shot_made_flag) ) %>%
+    dplyr::select(shot_angle, shot_made_flag) %>%
+    mdlp()
+tmp <- aux$Disc.data
+
+ggextra <- function(ggplot) {
+    ggplot +
+        scale_x_continuous(name="Ángulo (grados)")
+}
+
+plotData_accuracy_v2(tmp, "shot_angle", ggextra)
+
+aux <- data.filtered %>%
+    mutate(shot_made_flag = as.factor(shot_made_flag) ) %>%
+    dplyr::select(shot_distance,  shot_made_flag) %>%
+    mdlp()
+tmp <- aux$Disc.data
+
+ggextra <- function(ggplot) {
+    ggplot +
+        scale_x_continuous(name="Distancia")
+}
+
+plotData_accuracy_v2(tmp, "shot_distance", ggextra)
+
+
+
+aux <- data.filtered %>%
+    mutate(shot_made_flag = as.factor(shot_made_flag) ) %>%
+    dplyr::select(remaining,  shot_made_flag) %>%
+    mdlp()
+tmp <- aux$Disc.data
+
+ggextra <- function(ggplot) {
+    ggplot +
+        scale_x_continuous(name="Remaining")
+}
+
+plotData_accuracy_v2(tmp, "remaining", ggextra)
+
+aux <- data.filtered %>%
+    mutate(shot_made_flag = as.factor(shot_made_flag) ) %>%
+    dplyr::select(loc_x,  shot_made_flag) %>%
+    mdlp()
+tmp <- aux$Disc.data
+
+ggextra <- function(ggplot) {
+    ggplot +
+        scale_x_continuous(name="loc_x")
+}
+
+plotData_accuracy_v2(tmp, "loc_x", ggextra)
+
+aux <- data.filtered %>%
+    mutate(shot_made_flag = as.factor(shot_made_flag) ) %>%
+    dplyr::select(loc_y,  shot_made_flag) %>%
+    mdlp()
+tmp <- aux$Disc.data
+
+ggextra <- function(ggplot) {
+    ggplot +
+        scale_x_continuous(name="loc_y")
+}
+
+plotData_accuracy_v2(tmp, "loc_y", ggextra)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r fig.height=20, fig.width=20}
+source("external.R")
+source("prepare-data.R")
+
+tmp <- dataTransformation( prepare( data.fullRecords ) ) %>%
+    mutate(periodN = as.numeric(as.character(period)),
+           game_dateN = as.numeric(game_date),
+           seasonN = c(1:20)[as.numeric(season)],
+           shot_made_flag = as.factor(shot_made_flag)) %>%
+    select(remaining, shot_angle, shot_distance, periodN, seasonN, shot_made_flag)
+tmp <- moveToLast(tmp, "shot_made_flag")
+
+ggpairs(selectNumericAndClass(tmp), aes(color = shot_made_flag), progress = FALSE)
+```
+
+```{r fig.height=5, fig.width=2}
+source("external.R")
+source("prepare-data.R")
+
+data.filtered <- norm(exclude(dataTransformation(prepare( data.fullRecords ))))
+
+tmp <- dataTransformation( prepare( data.fullRecords ) ) %>%
+    mutate(periodN = as.numeric(as.character(period)),
+           game_dateN = as.numeric(game_date),
+           seasonN = c(1:20)[as.numeric(season)],
+           shot_made_flag = as.factor(shot_made_flag)) %>%
+    select(remaining, shot_angle, shot_distance, periodN, seasonN, loc_x, loc_y)
+
+
+outlier_values <- boxplot.stats(tmp$shot_angle)$out  # outlier values.
+boxplot(tmp$shot_angle, main="shot_angle", boxwex=0.1, width = 5)
+
+outlier_values <- boxplot.stats(tmp$shot_distance)$out  # outlier values.
+boxplot(tmp$shot_distance, main="shot_distance", boxwex=0.1, width = 5)
+
+outlier_values <- boxplot.stats(tmp$loc_x)$out  # outlier values.
+boxplot(tmp$loc_x, main="loc_x", boxwex=0.1, width = 5)
+
+outlier_values <- boxplot.stats(tmp$loc_y)$out  # outlier values.
+boxplot(tmp$loc_y, main="loc_y", boxwex=0.1, width = 5)
+
+outlier_values <- boxplot.stats(tmp$remaining)$out  # outlier values.
+boxplot(tmp$remaining, main="remaining", boxwex=0.1, width = 5)
+
+```
+
+
+
+
+
+
+```{r}
+library(aplpack)
+
+source("external.R")
+source("prepare-data.R")
+
+tmp <- dataTransformation( prepare( data.fullRecords ) ) %>%
+    mutate(periodN = as.numeric(as.character(period)),
+           game_dateN = as.numeric(game_date),
+           seasonN = c(1:20)[as.numeric(season)],
+           shot_made_flag = as.factor(shot_made_flag)) %>%
+    select(remaining, shot_angle, shot_distance, periodN, seasonN)
+
+bagplot(x = tmp$remaining, y = tmp$periodN, pch=16, cex=2)
+bagplot(x = tmp$remaining, y = tmp$seasonN, pch=16, cex=2)
+bagplot(x = tmp$remaining, y = tmp$shot_angle, pch=16, cex=2)
+bagplot(x = tmp$remaining, y = tmp$shot_distance, pch=16, cex=2)
+
+bagplot(x = tmp$shot_angle, y = tmp$shot_distance, pch=16, cex=2)
+bagplot(x = tmp$shot_angle, y = tmp$periodN, pch=16, cex=2)
+```
+
